@@ -77,14 +77,14 @@ subject 使用中文或英文均可，但同一仓库内保持一致。
 
 feat(core): 添加 Thinker 基类
 
-- 提供 New/Remove 生命周期
-- 通过 Thinker.\_Instances 统一维护实例
-- 使用 \_IsRemoved 防止重复移除
+- 提供 `New/Remove` 生命周期
+- 通过 `Thinker._Instances` 统一维护实例
+- 使用 `_IsRemoved` 防止重复移除
 
 fix(core): 修复 Thinker 重复移除的问题
 
-Remove 中误用 self.\_Instances，改为 Thinker.\_Instances，
-避免子类覆盖 \_Instances 时实例无法从老祖宗表中移除。
+Remove 中误用 `self._Instances`，改为 `Thinker._Instances`，
+避免子类覆盖 `_Instances` 时实例无法从老祖宗表中移除。
 
 ## 不要做的事
 
