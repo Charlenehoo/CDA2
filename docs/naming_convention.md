@@ -2,6 +2,10 @@
 
 越靠上的规则优先级越高
 
+## 缩写
+
+缩写视为整体, 如 NPCPos(PascalCase) npcPos(camelCase) NPC_POS(UPPER_CASE)
+
 ## 文件与目录
 
 - 目录名、文件名：`lower_case/lower_case.lua`
@@ -41,6 +45,10 @@
 - 形参 - `camelCase`
 - 循环变量 - `camelCase`
 
+## 领域事件
+
+- PascalCase, 可以随便加入前缀后缀, 比如 CADOnRagdollCreated
+
 ## Hook ID
 
-- `ADDON_NAME .. "_" .. MODULE_NAME .. "_" .. EVENT`
+- `ADDON_NAME .. "_" .. MODULE_NAME .. "_" .. EVENT`, 此处 EVENT 可以是引擎事件, 也可以是领域事件, 领域事件的前缀后缀和这里的拼接无关
