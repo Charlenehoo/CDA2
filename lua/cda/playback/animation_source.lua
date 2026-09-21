@@ -36,6 +36,7 @@ local Thinker = include("cda/core/thinker.lua")
 ---@field _SequenceID number
 ---@field _AnchorID number
 ---@field _ShouldLoop boolean
+---@field _Duration number
 ---@field _EndTime number
 ---@field _StartPos Vector
 ---@field _TrySetupEntity fun(self: AnimationSource, track: Track): boolean
@@ -84,10 +85,8 @@ function AnimationSource:_TrySetupSequence(track)
     if not sequenceID or type(sequenceID) ~= "number" or sequenceID == -1 then
         return false
     end
-    local duration = track.Duration or sequenceDuration or math.huge
-    local endTime = CurTime() + duration
     self._SequenceID = sequenceID
-    self._EndTime = endTime
+    self._Duration = track.Duration or sequenceDuration or math.huge
     self._ShouldLoop = track.CanLoop
     return true
 end
@@ -125,15 +124,79 @@ end
 
 ---@param self AnimationSource
 function AnimationSource:Play()
+    self._EndTime = CurTime() + self._Duration
     self._Ent:ResetSequence(self._SequenceID)
     self._Ent:ResetSequenceInfo()
     self._Ent:SetCycle(0)
-
     timer.Simple(0, function ()
-        if not self:_TryRecordStartPos() then
+        if not self._Ent:IsValid() then
             self:Remove()
+            return
         end
+        self._StartPos = self:GetPos()
     end)
+end
+
+-- 每帧从骨骼位置向下打射线，测地面高度，把地面高度变化应用到实体 z 上。
+--
+-- 为什么参考点是骨骼位置，而不是实体位置：
+--   * 根运动机制下，实体位置在循环内是锚点 e1——在 _ApplyRootMotion 执行前
+--     它一直不动。用它当参考，等于假设"视觉对象不动"，与 draw 场景矛盾。
+--   * 视觉上真正在哪儿由骨骼表达：BonePos = e1 + 骨骼局部偏移，每帧都在变。
+--     射线从骨骼位置出发，捕捉的才是视觉立足点下方的地面。
+--
+-- 与 EDAE2 OneShot 的差异：
+--   * OneShot 里 prop_dynamic 是 no draw，只作驱动源；视觉是 ragdoll，
+--     贴地由 ragdoll 物理完成。所以 OneShot 用固定的 model:GetPos().z
+--     作参考高度，配合 lastHitZ / lastAddZ 累积出"骨骼相对原点的偏移量"，
+--     再由 ragdoll 物理体现。
+--   * AnimationSource 里 self._Ent 是 draw 的，它就是视觉对象。没有下游
+--     物理替它贴地，因此它的 z 必须主动跟随地形。
+--
+-- 算法：
+--   * 射线起点 = 骨骼位置 + (0,0,10)，终点 = 骨骼位置 - (0,0,100)。
+--   * 命中得 groundZ。
+--   * diff = groundZ - _LastGroundZ，直接加到实体 z 上。
+--   * 首次调用只记录 _LastGroundZ，不做修正——避免把第一帧的绝对高度
+--     当作变化量。
+--
+-- 为什么不需要 lastAddZ 式的累积：
+--   * OneShot 的 lastAddZ 累积的是"骨骼相对固定原点的偏移量"，
+--     最终由 ragdoll 物理表达。
+--   * 这里直接改实体 z，每帧的 diff 就是增量，不需要再累积。
+--
+-- 为什么动画自身的垂直起伏不会污染信号：
+--   * 骨骼在局部空间上下浮动时，射线起点随之浮动，但地面高度不变，
+--     groundZ 不变，diff = 0，不修正。
+--   * 只有地形本身变化（骨骼水平漂移到不同地面高度）才产生非零 diff。
+---@param self AnimationSource
+function AnimationSource:_TraceGround()
+    if not self._Ent:IsValid() then return end
+
+    local bonePos = self:GetPos()
+    if not bonePos then return end
+
+    local trace = util.TraceLine({
+        start  = bonePos + Vector(0, 0, 10),
+        endpos = bonePos - Vector(0, 0, 100),
+        mask   = MASK_SOLID,
+        filter = { self._Ent },
+    })
+    if not trace.Hit then return end
+
+    local groundZ = trace.HitPos.z
+
+    if not self._LastGroundZ then
+        self._LastGroundZ = groundZ
+        return
+    end
+
+    local diff = groundZ - self._LastGroundZ
+    self._LastGroundZ = groundZ
+
+    if diff ~= 0 then
+        self._Ent:SetPos(self._Ent:GetPos() + Vector(0, 0, diff))
+    end
 end
 
 -- 循环播放时，把根骨在一轮里累积的水平位移转移到实体上，避免循环处骨骼回跳。
