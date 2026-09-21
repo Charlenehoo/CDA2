@@ -4,7 +4,7 @@ local helper = {}
 
 ---从密集数组中 O(1) 移除指定下标的元素
 ---若被移除的不是末尾元素，则末尾元素会填补空位并作为第二个返回值返回
----@param array table
+---@param array any[]
 ---@param index number
 ---@return any removed
 ---@return any moved
