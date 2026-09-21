@@ -41,7 +41,7 @@ local Thinker = include("cda/core/thinker.lua")
 ---@field _TrySetupEntity fun(self: AnimationSource, track: Track): boolean
 ---@field _TrySetupAnchor fun(self: AnimationSource): boolean
 ---@field _TrySetupSequence fun(self: AnimationSource, track: Track): boolean
----@field _RecordStartPos fun(self: AnimationSource)
+---@field _TryRecordStartPos fun(self: AnimationSource): boolean
 ---@field _ApplyRootMotion fun(self: AnimationSource)
 ---@field GetPos fun(self: AnimationSource): Vector
 ---@field Play fun(self: AnimationSource)
@@ -114,12 +114,13 @@ function AnimationSource:GetPos()
 end
 
 ---@param self AnimationSource
-function AnimationSource:_RecordStartPos()
+---@return boolean ok
+function AnimationSource:_TryRecordStartPos()
     if not self._Ent:IsValid() then
-        self:Remove()
-        return
+        return false
     end
     self._StartPos = self:GetPos()
+    return true
 end
 
 ---@param self AnimationSource
@@ -129,7 +130,9 @@ function AnimationSource:Play()
     self._Ent:SetCycle(0)
 
     timer.Simple(0, function ()
-        self:_RecordStartPos()
+        if not self:_TryRecordStartPos() then
+            self:Remove()
+        end
     end)
 end
 
@@ -144,7 +147,7 @@ end
 --
 -- 时序：
 --   T0            Play() → ResetSequence 到第 0 帧
---   T0 + 1 帧     _RecordStartPos() 采样，此时 BonePos = v1，Ent:GetPos() = e1
+--   T0 + 1 帧     _TryRecordStartPos() 采样，此时 BonePos = v1，Ent:GetPos() = e1
 --   播放中         Ent 不动，骨骼局部偏移随动画变化，BonePos = v2
 --   到达 EndTime   _Think 触发
 --
