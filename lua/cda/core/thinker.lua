@@ -1,7 +1,6 @@
 -- lua/cda/core/thinker.lua
 
 local Constants = include("cda/core/constants.lua")
-local helper = include("cda/core/helper.lua")
 
 local ADDON_NAME = Constants.ADDON_NAME
 local MODULE_NAME = "Thinker"
@@ -10,6 +9,8 @@ if package.loaded[KEY] then
     return package.loaded[KEY]
 end
 
+local helper = include("cda/core/helper.lua")
+
 ---@class Thinker
 ---@field _DenseIndex number|nil
 ---@field _Think fun(self: Thinker)
@@ -17,19 +18,22 @@ end
 ---@field Remove fun(self: Thinker)
 
 ---@class ThinkerClass
----@field _Dense Thinker[]
 ---@field New fun(self: ThinkerClass): Thinker
 local Thinker = {}
 Thinker.__index = Thinker
-Thinker._Dense = {}
 
+-- 所有实例（含子类实例）统一由模块级闭包管理，外部无法访问。
+-- 这里不放在 Thinker._Dense 上，是为了避免外部误改内部状态，
+-- 同时保证子类与祖宗共享同一份密集数组。
+
+---@type Thinker[]
+local dense = {}
+
+---@param self ThinkerClass
 ---@return Thinker
 function Thinker:New()
     local instance = setmetatable({}, self) --[[@as Thinker]]
 
-    -- 如果子类还有子类, 应该由祖宗 ThinkerClass 的 Thinker._Dense 统一管理
-    -- 因此这里用 Thinker._Dense 而不是 self._Dense, Thinker:Remove 中同理
-    local dense = Thinker._Dense
     local index = #dense + 1
     dense[index] = instance
     instance._DenseIndex = index
@@ -38,11 +42,12 @@ function Thinker:New()
 end
 
 ---_Think 中只允许删除自身
+---@param self Thinker
 function Thinker:Remove()
     if not self._DenseIndex then return end
 
     local index = self._DenseIndex
-    local _, moved = helper.SwapRemove(Thinker._Dense, index)
+    local _, moved = helper.SwapRemove(dense, index)
     if moved then
         moved._DenseIndex = index
     end
@@ -51,11 +56,13 @@ function Thinker:Remove()
     self:_OnRemove()
 end
 
+---@param self Thinker
 function Thinker:_Think() end
 
+---@param self Thinker
 function Thinker:_OnRemove() end
 
--- Thinker._Dense 是密集数组，Remove 通过 helper.SwapRemove 实现 O(1) 删除：
+-- dense 是密集数组，Remove 通过 helper.SwapRemove 实现 O(1) 删除：
 -- 若删除的不是末尾，则把末尾元素补到被删位置。
 --
 -- 遍历方向必须与 SwapRemove 的“末尾补位”语义配合：
@@ -77,7 +84,6 @@ function Thinker:_OnRemove() end
 -- 遍历期间只标记 _PendingRemove，遍历结束后统一从后往前 SwapRemove 清理。
 
 local function think()
-    local dense = Thinker._Dense
     for i = #dense, 1, -1 do
         local instance = dense[i]
         if instance then
