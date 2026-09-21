@@ -2,18 +2,6 @@
 
 local Constants = include("cda/core/constants.lua")
 
-local ADDON_NAME = Constants.ADDON_NAME
-local MODULE_NAME = "BSModAdapter"
-local KEY = ADDON_NAME .. "_" .. MODULE_NAME
-if package.loaded[KEY] then
-    return package.loaded[KEY]
-end
-
-local Event = Constants.Event
-local BSMOD_EVENT_RequestCustomKillMove = "CustomKillMoves"
-
-local Adepter = {}
-
 ---@class BSModCustomKillMoveResult
 ---@field [1] string? PlyKMModel 玩家 killmove 模型路径
 ---@field [2] string? TargetKMModel 目标 killmove 模型路径
@@ -40,8 +28,6 @@ local function parseSceneDescriptor(bsResult, killer, victim)
     local victimTrack = {
         ModelName = victimModel,
         SequenceName = sequenceName,
-        Position = Vector(0, 0, 0),
-        Angle = Angle(0, 0, 0),
         Duration = bsResult[7],
     }
 
@@ -49,8 +35,6 @@ local function parseSceneDescriptor(bsResult, killer, victim)
     local killerTrack = {
         ModelName = victimModel,
         SequenceName = sequenceName,
-        Position = Vector(0, 0, 0),
-        Angle = Angle(0, 0, 0),
         Duration = bsResult[7],
     }
 
@@ -61,15 +45,16 @@ local function parseSceneDescriptor(bsResult, killer, victim)
     }
 end
 
-local EVENT = Event.RequestCustomKillMove
-local ID = KEY .. "_" .. EVENT
-hook.Add(EVENT, ID, function (killer, victim, angleAround)
-    ---@type BSModCustomKillMoveResult?
-    local bsModCustomKillMoveResult = hook.Run("CustomKillMoves", killer, victim, angleAround)
-    if not bsModCustomKillMoveResult then return nil end
+local BSMOD_EVENT_RequestCustomKillMove = "CustomKillMoves"
 
-    return parseSceneDescriptor(bsModCustomKillMoveResult, killer, victim)
-end)
+local ADDON_NAME = Constants.ADDON_NAME
+local MODULE_NAME = "BSModAdapter"
+local Event = Constants.Event
+hook.Add(Event.RequestCustomKillMove, ADDON_NAME .. "_" .. MODULE_NAME .. "_" .. Event.RequestCustomKillMove,
+    function (killer, victim, angleAround)
+        ---@type BSModCustomKillMoveResult?
+        local bsModCustomKillMoveResult = hook.Run(BSMOD_EVENT_RequestCustomKillMove, killer, victim, angleAround)
+        if not bsModCustomKillMoveResult then return nil end
 
-package.loaded[KEY] = Adepter
-return Adepter
+        return parseSceneDescriptor(bsModCustomKillMoveResult, killer, victim)
+    end)
