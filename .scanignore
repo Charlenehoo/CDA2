@@ -3,3 +3,5 @@ scan.md
 .editorconfig
 .scanignore
 .gitignore
+
+bsmod_adapter.lua

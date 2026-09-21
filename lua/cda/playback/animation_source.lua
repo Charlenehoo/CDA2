@@ -37,6 +37,11 @@ local Thinker = include("cda/core/thinker.lua")
 ---@field AnchorID number
 ---@field ShouldLoop boolean
 ---@field EndTime number
+---@field StartPos Vector
+---@field _UpdateEntity fun(self: AnimationSource, track: Track)
+---@field _UpdateAnchor fun(self: AnimationSource)
+---@field _UpdateSequence fun(self: AnimationSource, track: Track)
+---@field GetPos fun(self: AnimationSource)
 ---@field Play fun(self: AnimationSource)
 
 ---@class AnimationSourceClass:ThinkerClass
@@ -44,56 +49,66 @@ local Thinker = include("cda/core/thinker.lua")
 local AnimationSource = setmetatable({}, { __index = Thinker })
 AnimationSource.__index = AnimationSource
 
+---@param self AnimationSource
+---@param track Track
+---@return boolean ok
+function AnimationSource:_UpdateEntity(track)
+    local ent = acquireEntity(track.ModelName)
+    if not ent then
+        return false
+    end
+    instance.Ent = ent
+    return true
+end
+
+local PELVIS = "ValveBiped.Bip01_Pelvis"
+
+---@param self AnimationSource
+---@return boolean ok
+function AnimationSource:_UpdateAnchor()
+    local id = self.Ent:LookupBone(PELVIS)
+    if not id or type(id) ~= "number" or id < 0 then
+        return false
+    end
+    self.AnchorID = id
+    return true
+end
+
+---@param self AnimationSource
+---@param track Track
+---@return boolean ok
+function AnimationSource:_UpdateSequence(track)
+    local sequenceID, sequenceDuration = self.Ent:LookupSequence(track.SequenceName)
+    if not sequenceID or type(sequenceID) ~= "number" or sequenceID == -1 then
+        return false
+    end
+    local duration = track.Duration or sequenceDuration or math.huge
+    local endTime = CurTime() + duration
+    self.SequenceID = sequenceID
+    self.EndTime = endTime
+    self.ShouldLoop = track.CanLoop
+    return true
+end
+
 ---@param self AnimationSourceClass
 ---@param track Track
 ---@return AnimationSource|nil
 function AnimationSource:New(track)
     local instance = Thinker.New(self) --[[@as AnimationSource]]
-    local ent = acquireEntity(track.ModelName)
-    if not ent then
+    if not instance:_UpdateEntity(track) or
+        not instance:_UpdateAnchor() or
+        not instance:_UpdateSequence(track) then
         instance:Remove()
         return nil
     end
-
-    local sequenceID, sequenceDuration = ent:LookupSequence(track.SequenceName)
-    if not sequenceID or type(sequenceID) ~= "number" or sequenceID == -1 then
-        instance:Remove()
-        return nil
-    end
-
-    local anchorID = getAnchorID(ent)
-    if not anchorID or type(anchorID) ~= "number" or anchorID < 0 then
-        instance:Remove()
-        return nil
-    end
-
-    local duration = track.Duration or sequenceDuration or math.huge
-    local endTime = CurTime() + duration
-
-    instance.Ent = ent
-    instance.SequenceID = sequenceID
-    instance.AnchorID = anchorID
-    instance.ShouldLoop = track.CanLoop
-    instance.EndTime = endTime
-
     return instance
 end
 
-local PELVIS = "ValveBiped.Bip01_Pelvis"
-
----@param ent AnimationSource
----@return number|nil id
-local function getAnchorID(ent)
-    local ent = instance.Ent
-    return ent:LookupBone(PELVIS)
-end
-
 ---@param self AnimationSource
----@return Vector 
-function AnimationSource:GetAnchorPos()
-    if not self.AnchorID then
-        self.AnchorID = ent:LookupBone(PELVIS)
-    end
+---@return Vector
+function AnimationSource:GetPos()
+    local pos, _ = self.Ent:GetBonePosition(self.AnchorID)
+    return pos
 end
 
 ---@param self AnimationSource
@@ -103,7 +118,10 @@ function AnimationSource:Play()
     self.Ent:SetCycle(0)
 
     timer.Simple(0, function ()
-        local startPos = self.Ent:
+        if not self.Ent:IsValid() then
+            self:Remove()
+        end
+        self.StartPos = self:GetPos()
     end)
 end
 
@@ -111,11 +129,14 @@ end
 function AnimationSource:_Think()
     local now = CurTime()
     if now < self.EndTime then return end
-
-    if self.ShouldLoop then
-    else
+    if not self.Ent:IsValid() or not self.ShouldLoop then
         self:Remove()
     end
+    local endPos = self:GetPos()
+    local delta = endPos - self.StartPos
+    local delta2D = Vector(delta.x, delta.y, 0)
+    self.Ent:SetPos(self.Ent:GetPos() + delta2D)
+    self:Play()
 end
 
 ---@param self AnimationSource
