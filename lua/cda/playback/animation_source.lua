@@ -48,11 +48,14 @@ AnimationSource.__index = AnimationSource
 function AnimationSource:New(track)
     local instance = Thinker.New(self) --[[@as AnimationSource]]
     local ent = acquireEntity(track.ModelName)
-    if not ent then return nil end
+    if not ent then
+        instance:Remove()
+        return nil
+    end
 
     local sequenceID, sequenceDuration = ent:LookupSequence(track.SequenceName)
-    if not sequenceID or not type(sequenceID) == "number" or sequenceID == -1 then
-        releaseEntity(ent)
+    if not sequenceID or type(sequenceID) ~= "number" or sequenceID == -1 then
+        instance:Remove()
         return nil
     end
 

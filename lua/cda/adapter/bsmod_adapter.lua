@@ -33,9 +33,9 @@ local function parseSceneDescriptor(bsResult, killer, victim)
 
     ---@type Track
     local killerTrack = {
-        ModelName = victimModel,
+        ModelName = killerModel,
         SequenceName = sequenceName,
-        Duration = bsResult[7],
+        Duration = bsResult[6],
     }
 
     ---@type Scene
