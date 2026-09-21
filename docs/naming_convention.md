@@ -8,7 +8,7 @@
 
 ## 常量
 
-- 表字段作为常量：`UPPER_CASE`
+- 表字段作为常量：`Table.UPPER_CASE`
 - 普通变量作为常量：`UPPER_CASE`
 
 ## 表
@@ -21,7 +21,7 @@
 
 ## 表字段
 
-- 常量字段 → 见「常量」
+- 表字段作为常量 → 见「常量」
 - 表字段作为枚举 - `Table.UPPER_CASE`
 - 表字段 - `Table.PascalCase`
 - 类私有字段 - `Table._PascalCase`
