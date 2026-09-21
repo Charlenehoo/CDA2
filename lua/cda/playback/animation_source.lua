@@ -1,4 +1,4 @@
--- lua/cda/playback/animation_model.lua
+-- lua/cda/playback/animation_source.lua
 
 local Constants = include("cda/core/constants.lua")
 
@@ -32,12 +32,12 @@ end
 local Thinker = include("cda/core/thinker.lua")
 
 ---@class AnimationSource:Thinker
----@field Ent Entity
----@field SequenceID number
----@field AnchorID number
----@field ShouldLoop boolean
----@field EndTime number
----@field StartPos Vector
+---@field _Ent Entity
+---@field _SequenceID number
+---@field _AnchorID number
+---@field _ShouldLoop boolean
+---@field _EndTime number
+---@field _StartPos Vector
 ---@field _UpdateEntity fun(self: AnimationSource, track: Track)
 ---@field _UpdateAnchor fun(self: AnimationSource)
 ---@field _UpdateSequence fun(self: AnimationSource, track: Track)
@@ -57,7 +57,7 @@ function AnimationSource:_UpdateEntity(track)
     if not ent then
         return false
     end
-    self.Ent = ent
+    self._Ent = ent
     return true
 end
 
@@ -66,11 +66,11 @@ local PELVIS = "ValveBiped.Bip01_Pelvis"
 ---@param self AnimationSource
 ---@return boolean ok
 function AnimationSource:_UpdateAnchor()
-    local id = self.Ent:LookupBone(PELVIS)
+    local id = self._Ent:LookupBone(PELVIS)
     if not id or type(id) ~= "number" or id < 0 then
         return false
     end
-    self.AnchorID = id
+    self._AnchorID = id
     return true
 end
 
@@ -78,15 +78,15 @@ end
 ---@param track Track
 ---@return boolean ok
 function AnimationSource:_UpdateSequence(track)
-    local sequenceID, sequenceDuration = self.Ent:LookupSequence(track.SequenceName)
+    local sequenceID, sequenceDuration = self._Ent:LookupSequence(track.SequenceName)
     if not sequenceID or type(sequenceID) ~= "number" or sequenceID == -1 then
         return false
     end
     local duration = track.Duration or sequenceDuration or math.huge
     local endTime = CurTime() + duration
-    self.SequenceID = sequenceID
-    self.EndTime = endTime
-    self.ShouldLoop = track.CanLoop
+    self._SequenceID = sequenceID
+    self._EndTime = endTime
+    self._ShouldLoop = track.CanLoop
     return true
 end
 
@@ -107,43 +107,43 @@ end
 ---@param self AnimationSource
 ---@return Vector
 function AnimationSource:GetPos()
-    local pos, _ = self.Ent:GetBonePosition(self.AnchorID)
+    local pos, _ = self._Ent:GetBonePosition(self._AnchorID)
     return pos
 end
 
 ---@param self AnimationSource
 function AnimationSource:Play()
-    self.Ent:ResetSequence(self.SequenceID)
-    self.Ent:ResetSequenceInfo()
-    self.Ent:SetCycle(0)
+    self._Ent:ResetSequence(self._SequenceID)
+    self._Ent:ResetSequenceInfo()
+    self._Ent:SetCycle(0)
 
     timer.Simple(0, function ()
-        if not self.Ent:IsValid() then
+        if not self._Ent:IsValid() then
             self:Remove()
             return
         end
-        self.StartPos = self:GetPos()
+        self._StartPos = self:GetPos()
     end)
 end
 
 ---@param self AnimationSource
 function AnimationSource:_Think()
     local now = CurTime()
-    if now < self.EndTime then return end
-    if not self.Ent:IsValid() or not self.ShouldLoop then
+    if now < self._EndTime then return end
+    if not self._Ent:IsValid() or not self._ShouldLoop then
         self:Remove()
         return
     end
     local endPos = self:GetPos()
-    local delta = endPos - self.StartPos
+    local delta = endPos - self._StartPos
     local delta2D = Vector(delta.x, delta.y, 0)
-    self.Ent:SetPos(self.Ent:GetPos() + delta2D)
+    self._Ent:SetPos(self._Ent:GetPos() + delta2D)
     self:Play()
 end
 
 ---@param self AnimationSource
 function AnimationSource:_OnRemove()
-    releaseEntity(self.Ent)
+    releaseEntity(self._Ent)
 end
 
 package.loaded[KEY] = AnimationSource
