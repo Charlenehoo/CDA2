@@ -1,5 +1,3 @@
-# docs/commit_convention.md
-
 ## 核心原则
 
 一次改动一次提交。
