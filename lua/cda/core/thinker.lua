@@ -27,6 +27,8 @@ Thinker._Dense = {}
 function Thinker:New()
     local instance = setmetatable({}, self) --[[@as Thinker]]
 
+    -- 如果子类还有子类, 应该由祖宗 ThinkerClass 的 Thinker._Dense 统一管理
+    -- 因此这里用 Thinker._Dense 而不是 self._Dense, Thinker:Remove 中同理
     local dense = Thinker._Dense
     local index = #dense + 1
     dense[index] = instance
