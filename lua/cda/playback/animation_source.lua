@@ -3,7 +3,7 @@
 local Constants = include("cda/core/constants.lua")
 
 local ADDON_NAME = Constants.ADDON_NAME
-local MODULE_NAME = "AnimationModel"
+local MODULE_NAME = "AnimationSource"
 local KEY = ADDON_NAME .. "_" .. MODULE_NAME
 if package.loaded[KEY] then
     return package.loaded[KEY]
