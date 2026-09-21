@@ -57,7 +57,7 @@ function AnimationSource:_UpdateEntity(track)
     if not ent then
         return false
     end
-    instance.Ent = ent
+    self.Ent = ent
     return true
 end
 
@@ -120,6 +120,7 @@ function AnimationSource:Play()
     timer.Simple(0, function ()
         if not self.Ent:IsValid() then
             self:Remove()
+            return
         end
         self.StartPos = self:GetPos()
     end)
@@ -131,6 +132,7 @@ function AnimationSource:_Think()
     if now < self.EndTime then return end
     if not self.Ent:IsValid() or not self.ShouldLoop then
         self:Remove()
+        return
     end
     local endPos = self:GetPos()
     local delta = endPos - self.StartPos
