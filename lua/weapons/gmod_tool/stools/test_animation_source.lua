@@ -3,10 +3,7 @@ TOOL.Category = "Debug"
 
 local AnimationSource = include("cda/playback/animation_source.lua")
 
--- 使用 crawl.face_up.male 的第一条动画。
--- 模型别名 "brutal" → "models/brutal_deaths/model_anim_modify.mdl"。
--- CanLoop = true 用来验证 _ApplyRootMotion 的循环回跳补偿。
-local TRACK = {
+local TRACK_BASE = {
     ModelName    = "models/brutal_deaths/model_anim_modify.mdl",
     SequenceName = "crawling1",
     CanLoop      = true,
@@ -22,36 +19,50 @@ local function stopCurrent()
     end
 end
 
--- 左键：在点击位置播放一次爬行动画。
--- 每次点击先清理上一个实例——避免多个 prop_dynamic 叠在一起。
-function TOOL:LeftClick(tr)
-    stopCurrent()
+-- 上层编排：loop = Remove 旧的 + 从 nextPos New 新的。
+--
+-- nextPos 由 AnimationSource 直接给出——上层不需要保留初始 pos，
+-- 也不需要做加法。这是"输出 pos 而非 delta"的直接收益。
+local function startLoop(pos)
+    local track = {
+        ModelName    = TRACK_BASE.ModelName,
+        SequenceName = TRACK_BASE.SequenceName,
+        CanLoop      = TRACK_BASE.CanLoop,
+        Pos          = pos,
+    }
 
-    local source = AnimationSource:New(TRACK)
+    local source = AnimationSource:New(track)
     if not source then
         print("[test_animation_source] New failed",
-            " model=", TRACK.ModelName,
-            " anim=", TRACK.SequenceName)
-        return false
+            " model=", track.ModelName,
+            " anim=", track.SequenceName)
+        return
     end
 
-    -- 放到点击位置。
-    -- AnimationSource 本身不接收位置参数，New 之后 Play 之前手动设置。
-    -- 工具枪直接访问私有字段 _Ent 是本工具的破例——它就是要验证实现，
-    -- 不遵循生产代码的封装约定。
-    if source._Ent:IsValid() then
-        source._Ent:SetPos(tr.HitPos)
-        source._Ent:SetBodygroup(source._Ent:FindBodygroupByName("barney"), 1)
-    end
-
-    source:Play()
+    source._Ent:SetBodygroup(source._Ent:FindBodygroupByName("barney"), 1)
     current = source
 
-    print("[test_animation_source] playing",
-        " anim=", TRACK.SequenceName,
-        " loop=", TRACK.CanLoop,
-        " pos=", tostring(tr.HitPos))
+    source:Play(function (nextPos)
+        source:Remove()
+        if current == source then
+            current = nil
+        end
 
+        if track.CanLoop then
+            startLoop(nextPos)
+        end
+    end)
+
+    print("[test_animation_source] playing",
+        " anim=", track.SequenceName,
+        " loop=", track.CanLoop,
+        " pos=", tostring(pos))
+end
+
+-- 左键：在点击位置开始播放。
+function TOOL:LeftClick(tr)
+    stopCurrent()
+    startLoop(tr.HitPos)
     return true
 end
 
@@ -67,18 +78,10 @@ end
 
 -- Reload（换弹键 R）：把玩家传送到动画实体当前位置。
 --
--- 用途：debug 用。不停动画——玩家瞬移过去后动画继续播，
--- 可直接观察：
---   * 骨骼是否还在动（判断动画是否真的在播）
---   * 骨骼与地形是否贴合（判断 _TraceGround 是否正确）
---   * 循环处骨骼是否回跳（判断 _ApplyRootMotion 是否正确）
+-- 用途：debug 用。不停动画——玩家瞬移过去后动画继续播，可直接观察
+-- 骨骼与地形的贴合、循环接缝是否跳跃。
 --
--- 若发现传送后动画其实还在播，只是实体位置错了，说明问题在 SetPos 算法
--- 而非播放路径。
---
--- 位置取 _Ent:GetPos()——实体原点，不是骨骼位置。
--- 骨骼位置每帧在变，取哪个时刻都会飘；实体原点是根运动的锚点，
--- 更适合"传送到动画所在处"这个语义。
+-- 位置取 _Ent:GetPos()（实体原点），不是 GetRootBonePos()——后者每帧在变。
 function TOOL:Reload(tr)
     if not current then
         print("[test_animation_source] no active animation to teleport to")

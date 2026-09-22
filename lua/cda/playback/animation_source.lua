@@ -1,8 +1,18 @@
 -- lua/cda/playback/animation_source.lua
 --
--- AnimationSource —— 播放一段动画，并把动画自带的位移转移到实体上。
+-- AnimationSource —— 单次播放一段动画，输出下一轮起点。
 --
--- 所有机制的详细推演与日志证据见 docs/animation_source_timing.md。
+-- 职责边界：
+--   * 只负责一次播放。生命周期 = 从 New 到 _Finish。
+--   * 不管理 loop —— loop 是上层编排的事（Remove 旧的 + 从 nextPos New 新的）。
+--   * 不自行 Remove —— 结束后设 _Finished 并回调，由上层决定何时回收。
+--
+-- 输出：
+--   * _NextPos —— 一次播放结束时，若要以本轮终点无缝衔接下一轮，
+--     下一轮 Track.Pos 应该是什么。上层直接用它 New 新的 AnimationSource
+--     即可。垂直分量已包含（实体 z 已由地形跟随放到正确高度）。
+--
+-- 设计推演与日志证据见 docs/animation_source_timing.md。
 -- 本文件注释只写简要说明 + 引用章节名。
 
 local Constants = include("cda/core/constants.lua")
@@ -19,7 +29,7 @@ end
 local LOG_INTERVAL = 0.25
 
 -- 地形高度变化低于此值视为噪声，不修正 z。
--- 详见 docs/animation_source_timing.md 的「垂直通道：_ApplyGroundFollow」。
+-- 详见 docs/animation_source_timing.md 的「垂直通道：地形跟随」。
 local GROUND_EPSILON = 0.01
 
 -- ============================================================================
@@ -38,8 +48,8 @@ local function acquireEntity(modelName, pos, ang)
 
     ent:SetModel(modelName)
 
-    -- Pos / Ang 必须在 Spawn 之前设置——Spawn 是引擎建立骨骼世界矩阵的时刻，
-    -- 此时设位置一次到位，避免后续 GetBonePosition 读到旧坐标系。
+    -- Pos / Ang 必须在 Spawn 之前设置——Spawn 是引擎建立骨骼世界矩阵的
+    -- 时刻，此时设位置一次到位。
     -- 详见 docs/animation_source_timing.md 的「干预过程中的时序问题」。
     if pos then ent:SetPos(pos) end
     if ang then ent:SetAngles(ang) end
@@ -62,22 +72,22 @@ local Thinker = include("cda/core/thinker.lua")
 ---@field _SequenceID number
 ---@field _SequenceName string
 ---@field _RootBoneID number
----@field _ShouldLoop boolean
----@field _Duration number          本轮内容时长（秒），New 时确定
----@field _EndTime number           本轮结束时刻，Play 时重算
----@field _BaseRootPos Vector       本轮起点的根位置（世界坐标）
----@field _BaseGroundZ number|nil   本轮起点地面高度
----@field _BaseEntZ number|nil      本轮起点实体 z
+---@field _Duration number          内容时长（秒），New 时确定
+---@field _EndTime number           结束时刻，Play 时重算
+---@field _BaseRootPos Vector       起点根骨世界坐标（基线）
+---@field _BaseGroundZ number|nil   起点地面高度（基线）
+---@field _BaseEntZ number|nil      起点实体 z（基线）
+---@field _Finished boolean
+---@field _NextPos Vector|nil       下一轮起点（未完成时 nil）
+---@field _OnFinished fun(nextPos: Vector)|nil
 ---@field _LastLogTime number
----@field _LoopCount number
 ---@field _TrySetupEntity fun(self: AnimationSource, track: Track): boolean
 ---@field _TrySetupRootBone fun(self: AnimationSource): boolean
 ---@field _TrySetupSequence fun(self: AnimationSource, track: Track): boolean
 ---@field _TrySetupBaseline fun(self: AnimationSource): boolean
----@field _ApplyRootMotion fun(self: AnimationSource)
 ---@field _ApplyGroundFollow fun(self: AnimationSource)
+---@field _Finish fun(self: AnimationSource, nextPos: Vector)
 ---@field GetRootBonePos fun(self: AnimationSource): Vector
----@field Play fun(self: AnimationSource)
 
 ---@class AnimationSourceClass:ThinkerClass
 ---@field New fun(self: AnimationSourceClass, track: Track): AnimationSource
@@ -88,7 +98,7 @@ AnimationSource.__index = AnimationSource
 -- _TrySetup* 系列
 -- ============================================================================
 -- 契约：建立某种初始状态。失败返回 false，调用方决定是否回收。
--- 前三个在构造期调用；最后一个在每轮循环起点调用。
+-- 前三个在构造期调用；_TrySetupBaseline 在 Play 之后调用。
 -- ----------------------------------------------------------------------------
 
 ---@param self AnimationSource
@@ -99,7 +109,6 @@ function AnimationSource:_TrySetupEntity(track)
     if not ent then return false end
 
     self._Ent = ent
-    self._LoopCount = 0
     self._LastLogTime = 0
     return true
 end
@@ -126,14 +135,9 @@ function AnimationSource:_TrySetupSequence(track)
         return false
     end
 
-    -- _Duration 是常量（内容时长），_EndTime 是派生值（每次 Play 重算）。
-    -- 若 _EndTime 只在 New 里写一次，循环重播时会立即再次触发。
-    -- 详见 docs/animation_source_timing.md 的「干预过程中的时序问题」。
     self._SequenceID = sequenceID
     self._SequenceName = track.SequenceName
     self._Duration = track.Duration or sequenceDuration or math.huge
-    self._ShouldLoop = track.CanLoop
-
     return true
 end
 
@@ -155,15 +159,30 @@ end
 -- 公开查询
 -- ============================================================================
 
---- 返回根骨骼的世界坐标。
----
---- 注意：不是 _Ent:GetPos()。两者关系详见
---- docs/animation_source_timing.md 的「两个 pos 的关系」。
+--- 根骨世界坐标。不是 _Ent:GetPos()。
+--- 两者关系详见 docs/animation_source_timing.md 的「两个 pos 的关系」。
 ---@param self AnimationSource
 ---@return Vector
 function AnimationSource:GetRootBonePos()
     local pos, _ = self._Ent:GetBonePosition(self._RootBoneID)
     return pos
+end
+
+--- 是否已完成本次播放。
+---@param self AnimationSource
+---@return boolean
+function AnimationSource:IsFinished()
+    return self._Finished == true
+end
+
+--- 下一轮起点。未完成时返回 nil。
+---
+--- 语义：上层若要以本轮终点无缝衔接下一轮，用此值作为下一轮 Track.Pos。
+--- 垂直分量已包含——实体 z 已由 _ApplyGroundFollow 放到正确高度。
+---@param self AnimationSource
+---@return Vector|nil
+function AnimationSource:GetNextPos()
+    return self._NextPos
 end
 
 -- ============================================================================
@@ -184,13 +203,13 @@ local function traceGroundZ(ent, rootPos)
     return trace.HitPos.z
 end
 
---- 每轮循环起点调用。建立 _BaseRootPos / _BaseGroundZ / _BaseEntZ。
+--- 建立本轮基线：_BaseRootPos / _BaseGroundZ / _BaseEntZ。
 ---
---- 若实体失效返回 false；若此刻射线 miss，基线留 nil，由 _ApplyGroundFollow
---- 下一帧惰性建立。
+--- 若实体失效返回 false；若此刻射线 miss，地面基线留 nil，由
+--- _ApplyGroundFollow 下一帧惰性建立。
 ---
 --- 为什么基线要与 _BaseRootPos 同一时刻采样、为什么用基线而非差分，
---- 详见 docs/animation_source_timing.md 的「垂直通道：_ApplyGroundFollow」。
+--- 详见 docs/animation_source_timing.md 的「垂直通道：地形跟随」。
 ---@param self AnimationSource
 ---@return boolean ok
 function AnimationSource:_TrySetupBaseline()
@@ -199,7 +218,6 @@ function AnimationSource:_TrySetupBaseline()
     local rootPos = self:GetRootBonePos()
     self._BaseRootPos = rootPos
 
-    -- 每轮重新建立地面基线——旧基线会污染新一轮的绝对位置。
     self._BaseGroundZ = nil
     self._BaseEntZ = nil
 
@@ -218,41 +236,31 @@ end
 -- 播放
 -- ============================================================================
 
+--- 开始本次播放。
+---
+--- ResetSequence 是同步 Lua API（非 Fire），立即生效。但仍需等一帧让骨骼
+--- 世界矩阵重算——Spawn 时的矩阵是针对 Spawn 时的 sequence 状态。
+--- 详见 docs/animation_source_timing.md 的「干预过程中的时序问题」。
+---
+--- onFinished 只在正常完成或实体失效时触发一次。nextPos 是下一轮起点
+--- （Vector(0,0,0) 表示失败或无位移）。AnimationSource 不自行 Remove——
+--- 由上层决定何时回收。
 ---@param self AnimationSource
-function AnimationSource:Play()
-    -- 用 Fire 系列而非 ResetSequence + SetCycle(0)。后者在 prop_dynamic 上
-    -- 会让动画停在最后一帧不循环。
-    -- 详见 docs/animation_source_timing.md 的「干预过程中的时序问题」。
-    self._Ent:Fire("SetPlaybackRate", 1)
-    self._Ent:Fire("SetAnimation", self._SequenceName, 0)
+---@param onFinished fun(nextPos: Vector)|nil
+function AnimationSource:Play(onFinished)
+    self._OnFinished = onFinished
+    self._Finished = false
+    self._NextPos = nil
 
-    -- 每次 Play 都是新一轮，重算结束时刻（_Duration 是常量）。
+    self._Ent:ResetSequence(self._SequenceID)
+
     self._EndTime = CurTime() + self._Duration
 
-    -- Fire 走 IO 队列，帧末生效。_TrySetupBaseline 里的 GetBonePosition
-    -- 必须等新序列生效——timer.Simple(0, ...) 是最早的安全时机。
-    -- 详见 docs/animation_source_timing.md 的「干预过程中的时序问题」。
     timer.Simple(0, function ()
         if not self:_TrySetupBaseline() then
             self:Remove()
         end
     end)
-end
-
--- ============================================================================
--- 水平通道：根运动转移
--- ============================================================================
-
---- 一轮结束时把根骨累积的水平位移转移到实体上，避免循环处骨骼回跳。
----
---- 为什么只取水平分量、为什么参考点是 _BaseRootPos，
---- 详见 docs/animation_source_timing.md 的「水平通道：_ApplyRootMotion」。
----@param self AnimationSource
-function AnimationSource:_ApplyRootMotion()
-    local endPos = self:GetRootBonePos()
-    local delta = endPos - self._BaseRootPos
-    local delta2D = Vector(delta.x, delta.y, 0)
-    self._Ent:SetPos(self._Ent:GetPos() + delta2D)
 end
 
 -- ============================================================================
@@ -263,7 +271,7 @@ end
 ---
 --- 为什么参考点是根骨位置而非实体位置、为什么用基线而非差分、
 --- 为什么动画自身的垂直起伏不污染信号、GROUND_EPSILON 的存在理由，
---- 详见 docs/animation_source_timing.md 的「垂直通道：_ApplyGroundFollow」。
+--- 详见 docs/animation_source_timing.md 的「垂直通道：地形跟随」。
 ---@param self AnimationSource
 function AnimationSource:_ApplyGroundFollow()
     if not self._Ent:IsValid() then return end
@@ -296,7 +304,7 @@ end
 ---@param self AnimationSource
 function AnimationSource:_LogState(tag, now)
     log.debug(string.format(
-        "[AnimationSource] %s t=%.3f entPos=%s rootPos=%s baseRootPos=%s baseGZ=%s baseEZ=%s endTime=%.3f loop=%d",
+        "[AnimationSource] %s t=%.3f entPos=%s rootPos=%s baseRootPos=%s baseGZ=%s baseEZ=%s endTime=%.3f finished=%s",
         tag, now,
         tostring(self._Ent:GetPos()),
         tostring(self:GetRootBonePos()),
@@ -304,13 +312,33 @@ function AnimationSource:_LogState(tag, now)
         tostring(self._BaseGroundZ),
         tostring(self._BaseEntZ),
         self._EndTime,
-        self._LoopCount or 0))
+        tostring(self._Finished)))
+end
+
+--- 完成本次播放。幂等——只在首次调用时触发回调。
+---@param self AnimationSource
+---@param nextPos Vector
+function AnimationSource:_Finish(nextPos)
+    if self._Finished then return end
+
+    self._Finished = true
+    self._NextPos = nextPos
+
+    -- 先清回调再调用——避免回调里重入 _Finish。
+    local cb = self._OnFinished
+    self._OnFinished = nil
+
+    self:_LogState("finish", CurTime())
+
+    if cb then cb(nextPos) end
 end
 
 ---@param self AnimationSource
 function AnimationSource:_Think()
     -- 每帧地形跟随——早退前执行，保证整个播放期间连续生效。
     self:_ApplyGroundFollow()
+
+    if self._Finished then return end
 
     local now = CurTime()
 
@@ -319,32 +347,26 @@ function AnimationSource:_Think()
         self:_LogState("tick", now)
     end
 
-    if now < self._EndTime then return end
-    if not self._Ent:IsValid() or not self._ShouldLoop then
-        self:Remove()
+    if not self._Ent:IsValid() then
+        self:_Finish(self._Ent and self._Ent:GetPos() or Vector(0, 0, 0))
         return
     end
 
-    -- 循环点：先水平转移，再开新一轮。
-    -- 顺序不能反——_ApplyRootMotion 必须在本帧内完成，否则下一轮
-    -- _TrySetupBaseline 采样的 _BaseRootPos 会带上未转移的水平位移。
-    self:_LogState("loop-before", now)
+    if now < self._EndTime then return end
 
-    self:_ApplyRootMotion()
-    self._LoopCount = (self._LoopCount or 0) + 1
+    -- 算下一轮起点：实体当前位置 + 根骨水平位移。
+    -- 垂直方向 _ApplyGroundFollow 已把实体 z 放到正确高度，直接用。
+    -- 推导见 docs/animation_source_timing.md 的「水平通道：根运动转移」。
+    local endPos = self:GetRootBonePos()
+    local delta = endPos - self._BaseRootPos
+    local delta2D = Vector(delta.x, delta.y, 0)
+    local nextPos = self._Ent:GetPos() + delta2D
 
-    self:_LogState("loop-after", now)
-
-    self:Play()
+    self:_Finish(nextPos)
 end
 
 ---@param self AnimationSource
 function AnimationSource:_OnRemove()
-    log.debug(string.format(
-        "[AnimationSource] removing entPos=%s loops=%d",
-        tostring(self._Ent and self._Ent:GetPos()),
-        self._LoopCount or 0))
-
     releaseEntity(self._Ent)
 end
 
