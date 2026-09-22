@@ -64,3 +64,43 @@ function TOOL:RightClick(tr)
     end
     return false
 end
+
+-- Reload（换弹键 R）：把玩家传送到动画实体当前位置。
+--
+-- 用途：debug 用。不停动画——玩家瞬移过去后动画继续播，
+-- 可直接观察：
+--   * 骨骼是否还在动（判断动画是否真的在播）
+--   * 骨骼与地形是否贴合（判断 _TraceGround 是否正确）
+--   * 循环处骨骼是否回跳（判断 _ApplyRootMotion 是否正确）
+--
+-- 若发现传送后动画其实还在播，只是实体位置错了，说明问题在 SetPos 算法
+-- 而非播放路径。
+--
+-- 位置取 _Ent:GetPos()——实体原点，不是骨骼位置。
+-- 骨骼位置每帧在变，取哪个时刻都会飘；实体原点是根运动的锚点，
+-- 更适合"传送到动画所在处"这个语义。
+function TOOL:Reload(tr)
+    if not current then
+        print("[test_animation_source] no active animation to teleport to")
+        return false
+    end
+
+    if not IsValid(current._Ent) then
+        print("[test_animation_source] current entity invalid")
+        stopCurrent()
+        return false
+    end
+
+    local pos = current._Ent:GetPos()
+    local ply = self:GetOwner()
+
+    if not IsValid(ply) then return false end
+
+    ply:SetPos(pos)
+
+    print("[test_animation_source] teleported to",
+        tostring(pos),
+        " (animation continues)")
+
+    return true
+end
